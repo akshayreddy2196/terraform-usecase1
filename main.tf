@@ -1,57 +1,79 @@
-# ----------------------
-# VPC & Subnets
-# ----------------------
+provider "aws" {
+  region = var.region
+}
+
+# Create VPC
 resource "aws_vpc" "main" {
-  cidr_block           = var.vpc_cidr
+  cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = { Name = "nginx-vpc" }
+
+  tags = {
+    Name = "main-vpc"
+  }
 }
 
-resource "aws_internet_gateway" "igw" {
+# Create Internet Gateway
+resource "aws_internet_gateway" "gw" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "nginx-igw" }
+
+  tags = {
+    Name = "main-igw"
+  }
 }
 
-data "aws_availability_zones" "available" {}
-
+# Create Public Subnets
 resource "aws_subnet" "public" {
-  count                  = 3
-  vpc_id                 = aws_vpc.main.id
-  cidr_block             = cidrsubnet(var.vpc_cidr, 8, count.index)
-  map_public_ip_on_launch = true
-  availability_zone      = data.aws_availability_zones.available.names[count.index]
-  tags                   = { Name = "public-subnet-${count.index+1}" }
+  count                   = 3
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet("10.0.0.0/16", 8, count.index)
+  availability_zone       = element(var.availability_zones, count.index)
+  map_public_ip_on_launch  = true
+
+  tags = {
+    Name = "public-subnet-${count.index + 1}"
+  }
 }
 
+# Create Route Table for Public Subnets
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "public-rt" }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+
+  tags = {
+    Name = "public-rt"
+  }
 }
 
-resource "aws_route" "public_internet" {
-  route_table_id         = aws_route_table.public.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.igw.id
-}
-
+# Associate Route Table with Subnets
 resource "aws_route_table_association" "public_assoc" {
-  count          = 3
+  count          = length(aws_subnet.public)
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
-# ----------------------
-# Security Groups
-# ----------------------
-resource "aws_security_group" "ec2_sg" {
-  name        = "ec2-sg"
+# Security Group for EC2 and ALB
+resource "aws_security_group" "allow_http" {
+  name        = "allow_http"
+  description = "Allow HTTP and SSH"
   vpc_id      = aws_vpc.main.id
-  description = "Allow HTTP inbound"
 
   ingress {
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -62,92 +84,83 @@ resource "aws_security_group" "ec2_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-}
 
-resource "aws_security_group" "alb_sg" {
-  name        = "alb-sg"
-  vpc_id      = aws_vpc.main.id
-  description = "Allow HTTP inbound"
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  tags = {
+    Name = "allow_http"
   }
 }
 
-# ----------------------
 # EC2 Instances with Nginx
-# ----------------------
-resource "aws_instance" "nginx" {
-  count         = length(var.instance_names)
-  ami           = "ami-0c55b159cbfafe1f0"
-  instance_type = "t3.micro"
-  subnet_id     = aws_subnet.public[count.index].id
-  key_name      = var.key_name
-  security_groups = [aws_security_group.ec2_sg.id]
-
-  user_data = <<-EOF
+resource "aws_instance" "web" {
+  count                       = 3
+  ami                         = var.ami_id
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.public[count.index].id
+  vpc_security_group_ids       = [aws_security_group.allow_http.id]
+  associate_public_ip_address  = true
+  user_data                   = <<-EOF
     #!/bin/bash
-    yum update -y
-    amazon-linux-extras install nginx1 -y
-    systemctl enable nginx
-    systemctl start nginx
-    if [ "${var.paths[count.index]}" == "/" ]; then
-      echo "<h1>${var.instance_names[count.index]} Page</h1>" > /usr/share/nginx/html/index.html
-    else
-      mkdir -p /usr/share/nginx/html${var.paths[count.index]}
-      echo "<h1>${var.instance_names[count.index]} Page</h1>" > /usr/share/nginx/html${var.paths[count.index]}/index.html
-    fi
-    systemctl restart nginx
+    sudo yum update -y
+    sudo amazon-linux-extras enable nginx1
+    sudo yum install nginx -y
+    echo "<h1>${element(var.page_titles, count.index)}</h1>" > /usr/share/nginx/html/index.html
+    sudo systemctl start nginx
+    sudo systemctl enable nginx
   EOF
 
   tags = {
-    Name = var.instance_names[count.index]
+    Name = "web-${count.index + 1}"
   }
 }
 
-# ----------------------
-# ALB & Target Groups
-# ----------------------
+# Create ALB
 resource "aws_lb" "app_lb" {
-  name               = "nginx-alb"
+  name               = "app-lb"
   internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb_sg.id]
+  load_balancer_type  = "application"
+  security_groups     = [aws_security_group.allow_http.id]
   subnets            = aws_subnet.public[*].id
+
+  tags = {
+    Name = "app-lb"
+  }
 }
 
+# Create Target Groups
 resource "aws_lb_target_group" "tg" {
-  count    = length(var.paths)
-  name     = "tg-${count.index+1}"
+  count    = 3
+  name     = "tg-${count.index + 1}"
   port     = 80
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
+
+  health_check {
+    path = "/"
+    port = "80"
+  }
+
+  tags = {
+    Name = "tg-${count.index + 1}"
+  }
 }
 
-resource "aws_lb_target_group_attachment" "tg_attachment" {
-  count            = length(var.paths)
+# Attach Instances to Target Groups
+resource "aws_lb_target_group_attachment" "tga" {
+  count            = 3
   target_group_arn = aws_lb_target_group.tg[count.index].arn
-  target_id        = aws_instance.nginx[count.index].id
+  target_id        = aws_instance.web[count.index].id
   port             = 80
 }
 
+# Create Listener for ALB
 resource "aws_lb_listener" "listener" {
   load_balancer_arn = aws_lb.app_lb.arn
-  port              = 80
+  port              = "80"
   protocol          = "HTTP"
 
   default_action {
     type = "fixed-response"
+
     fixed_response {
       content_type = "text/plain"
       message_body = "Not Found"
@@ -156,9 +169,11 @@ resource "aws_lb_listener" "listener" {
   }
 }
 
-resource "aws_lb_listener_rule" "path_rule" {
-  count        = length(var.paths)
+# Create Listener Rules for Path-based Routing
+resource "aws_lb_listener_rule" "rule" {
+  count        = 3
   listener_arn = aws_lb_listener.listener.arn
+  priority     = count.index + 1
 
   action {
     type             = "forward"
@@ -167,14 +182,7 @@ resource "aws_lb_listener_rule" "path_rule" {
 
   condition {
     path_pattern {
-      values = ["${var.paths[count.index]}*"]
+      values = [var.paths[count.index]]
     }
   }
-}
-
-# ----------------------
-# Outputs
-# ----------------------
-output "alb_dns_name" {
-  value = aws_lb.app_lb.dns_name
 }
