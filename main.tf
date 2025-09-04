@@ -1,3 +1,7 @@
+provider "aws" {
+  region = var.region
+}
+
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
@@ -18,9 +22,10 @@ resource "aws_internet_gateway" "gw" {
   }
 }
 
-# Public Subnets
+# Availability Zones
 data "aws_availability_zones" "available" {}
 
+# Public Subnets
 resource "aws_subnet" "public" {
   count                   = 3
   vpc_id                  = aws_vpc.main.id
@@ -89,12 +94,12 @@ resource "aws_security_group" "allow_http" {
 
 # EC2 Instances
 resource "aws_instance" "web" {
-  count                       = 3
-  ami                         = var.ami_id
-  instance_type               = "t3.micro"
-  subnet_id                   = aws_subnet.public[count.index].id
-  vpc_security_group_ids       = [aws_security_group.allow_http.id]
-  associate_public_ip_address  = true
+  count                      = 3
+  ami                        = var.ami_id
+  instance_type              = "t3.micro"
+  subnet_id                  = aws_subnet.public[count.index].id
+  vpc_security_group_ids      = [aws_security_group.allow_http.id]
+  associate_public_ip_address = true
 
   user_data = <<EOT
 #!/bin/bash
@@ -113,11 +118,11 @@ EOT
 
 # ALB
 resource "aws_lb" "app_lb" {
-  name                = "app-lb"
-  internal            = false
-  load_balancer_type  = "application"
-  security_groups     = [aws_security_group.allow_http.id]
-  subnets             = aws_subnet.public[*].id
+  name               = "app-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.allow_http.id]
+  subnets            = aws_subnet.public[*].id
 
   tags = {
     Name = "app-lb"
@@ -145,42 +150,4 @@ resource "aws_lb_target_group" "tg" {
 # Attach EC2 Instances to Target Groups
 resource "aws_lb_target_group_attachment" "tga" {
   count            = 3
-  target_group_arn = aws_lb_target_group.tg[count.index].arn
-  target_id        = aws_instance.web[count.index].id
-  port             = 80
-}
-
-# ALB Listener
-resource "aws_lb_listener" "listener" {
-  load_balancer_arn = aws_lb.app_lb.arn
-  port              = "80"
-  protocol          = "HTTP"
-
-  default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Not Found"
-      status_code  = "404"
-    }
-  }
-}
-
-# ALB Listener Rules
-resource "aws_lb_listener_rule" "rule" {
-  count        = 3
-  listener_arn = aws_lb_listener.listener.arn
-  priority     = count.index + 1
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.tg[count.index].arn
-  }
-
-  condition {
-    path_pattern {
-      values = [var.paths[count.index]]
-    }
-  }
-}
+  target_group_arn = aws_lb_target_group.tg[co]()_
