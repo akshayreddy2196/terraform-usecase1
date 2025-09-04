@@ -1,6 +1,3 @@
-provider "aws" {
-  region = var.region
-}
 
 # VPC
 resource "aws_vpc" "main" {
@@ -151,3 +148,4 @@ resource "aws_lb_target_group" "tg" {
 resource "aws_lb_target_group_attachment" "tga" {
   count            = 3
   target_group_arn = aws_lb_target_group.tg[co]()_
+
