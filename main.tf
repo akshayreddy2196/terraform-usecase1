@@ -98,14 +98,14 @@ resource "aws_instance" "web" {
   associate_public_ip_address = true
 
   user_data = <<EOT
-#!/bin/bash
-yum update -y
-amazon-linux-extras enable nginx1
-yum install nginx -y
-echo "<h1>${var.page_titles[count.index]}</h1>" > /usr/share/nginx/html/index.html
-systemctl start nginx
-systemctl enable nginx
-EOT
+   #!/bin/bash
+   yum update -y
+   amazon-linux-extras enable nginx1
+   yum install nginx -y
+   echo "<h1>${var.page_titles[count.index]}</h1>" > /usr/share/nginx/html/index.html
+   systemctl start nginx
+   systemctl enable nginx
+   EOT
 
   tags = {
     Name = "web-${count.index + 1}"
@@ -185,3 +185,4 @@ resource "aws_lb_listener_rule" "rule" {
     }
   }
 }
+
