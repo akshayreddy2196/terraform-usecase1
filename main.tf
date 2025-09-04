@@ -1,4 +1,3 @@
-
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
@@ -147,5 +146,42 @@ resource "aws_lb_target_group" "tg" {
 # Attach EC2 Instances to Target Groups
 resource "aws_lb_target_group_attachment" "tga" {
   count            = 3
-  target_group_arn = aws_lb_target_group.tg[co]()_
+  target_group_arn = aws_lb_target_group.tg[count.index].arn
+  target_id        = aws_instance.web[count.index].id
+  port             = 80
+}
 
+# ALB Listener
+resource "aws_lb_listener" "listener" {
+  load_balancer_arn = aws_lb.app_lb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Not Found"
+      status_code  = "404"
+    }
+  }
+}
+
+# ALB Listener Rules
+resource "aws_lb_listener_rule" "rule" {
+  count        = 3
+  listener_arn = aws_lb_listener.listener.arn
+  priority     = count.index + 1
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg[count.index].arn
+  }
+
+  condition {
+    path_pattern {
+      values = [var.paths[count.index]]
+    }
+  }
+}
